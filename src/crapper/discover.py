@@ -9,6 +9,7 @@ EXTENSIONS = {
     ".cljs": "clojure",
     ".bb": "clojure",
     ".java": "java",
+    ".kt": "kotlin",
     ".go": "go",
     ".ts": "typescript",
     ".tsx": "typescript",
@@ -43,6 +44,10 @@ SKIP_DIRS = {
 }
 
 TEST_DIRS = {"test", "tests", "spec", "specs", "__tests__"}
+# Gradle source sets other than `src/test`: `src/integrationTest`,
+# `src/commonTest`, `src/androidUnitTest`, `src/testFixtures`.
+TEST_SOURCE_SET_SUFFIXES = ("Test", "Tests")
+TEST_FIXTURES = "testFixtures"
 
 GO_TEST_SUFFIX = "_test.go"
 CLOJURE_TEST_SUFFIXES = ("_test.clj", "_test.cljc", "_test.cljs", "_test.bb")
@@ -74,6 +79,22 @@ def language_of(path: str | Path) -> str | None:
     return EXTENSIONS.get(file_path.suffix)
 
 
+def is_test_source_set(parent: str, name: str) -> bool:
+    if parent != "src":
+        return False
+    return name.endswith(TEST_SOURCE_SET_SUFFIXES) or name == TEST_FIXTURES
+
+
+def _in_test_dir(parts: tuple[str, ...]) -> bool:
+    if any(part in TEST_DIRS for part in parts):
+        return True
+    return any(is_test_source_set(parent, name) for parent, name in zip(parts, parts[1:]))
+
+
+def _skipped_dir(parent: str, name: str) -> bool:
+    return name in SKIP_DIRS or name in TEST_DIRS or is_test_source_set(parent, name)
+
+
 def is_test_file(path: str | Path) -> bool:
     file_path = Path(path)
     name = file_path.name
@@ -87,7 +108,7 @@ def is_test_file(path: str | Path) -> bool:
         return True
     if name.endswith("_test.py") or (name.startswith("test_") and name.endswith(".py")):
         return True
-    return any(part in TEST_DIRS for part in file_path.parts)
+    return _in_test_dir(file_path.parts)
 
 
 def _walk(root: Path) -> list[Path]:
@@ -97,9 +118,8 @@ def _walk(root: Path) -> list[Path]:
         return [root]
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name for name in dirnames if name not in SKIP_DIRS and name not in TEST_DIRS
-        ]
+        parent = Path(dirpath).name
+        dirnames[:] = [name for name in dirnames if not _skipped_dir(parent, name)]
         for name in filenames:
             path = Path(dirpath) / name
             if language_of(path) is None or is_test_file(path):

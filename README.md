@@ -1,6 +1,6 @@
 # crapper
 
-CRAP scores for Clojure, Java, Go, TypeScript, Rust, and Python. One run detects the language of each source file, applies that language's complexity and coverage rules, and writes the snapshot [uml-viewer](https://github.com/unclebob/uml-viewer) already reads.
+CRAP scores for Clojure, Java, Kotlin, Go, TypeScript, Rust, and Python. One run detects the language of each source file, applies that language's complexity and coverage rules, and writes the snapshot [uml-viewer](https://github.com/unclebob/uml-viewer) already reads.
 
 The formula is the one from [crap4clj](https://github.com/unclebob/crap4clj), [crap4java](https://github.com/unclebob/crap4java), and [crap4go](https://github.com/unclebob/crap4go):
 
@@ -48,6 +48,7 @@ uml-viewer groups entries by `:namespace` and joins each operation on `:name`. `
 | --- | --- | --- |
 | Clojure | the `ns` | the `defn` / `defn-` name |
 | Java | `package.Class`, or `package.Outer.Inner` | the method name |
+| Kotlin | `package.Class`, `package.Outer.Inner`, or `package.FileKt` for top-level functions | the function name |
 | Go | the package import path, or `import/path.Receiver` | the function or method name |
 | TypeScript | the dotted module path, or `module.Class` | the function or method name |
 | Rust | `crate::module`, or `crate::module::Type` | the function or method name |
@@ -60,6 +61,8 @@ Rename or move is a new entry. There is no identity matching across runs.
 Clojure follows crap4clj: `if` / `when` and their variants, `and`, `or`, `loop`, `catch`, and each clause of `cond`, `condp`, `case`, `cond->`, `cond->>`, `some->`, and `some->>`. Coverage prefers Cloverage's per-line form counts and falls back to LCOV.
 
 Java follows crap4java: `if`, loops, `catch`, `?:`, each `switch` label, and `&&` / `||`. Constructors and methods inside anonymous classes are omitted. Coverage is JaCoCo's `INSTRUCTION` counter.
+
+Kotlin counts the same decisions as Java: `if`, loops, `catch`, `?:`, each `when` entry (`else` included, like `default`), and `&&` / `||`. Safe calls (`?.`) and `!!` are not decisions. Named functions with a body are entries, top-level, extension and enum-entry functions included. Lambdas and local functions stay inside the enclosing function, as Java lambdas do, although kotlinc compiles them to methods of their own, so their coverage is not part of the enclosing function's. Functions in anonymous objects are omitted. Constructors, `init` blocks and property accessors are not entries. Top-level functions belong to the file facade class (`Billing.kt` is `BillingKt`, or the `@file:JvmName`), which is where JaCoCo reports them. Coverage is JaCoCo's `INSTRUCTION` counter, matched to the names kotlinc writes: `DefaultImpls` for interface bodies, `name$module` for `internal` members, `name-hash` for functions that take inline value classes. A Kotlin module with a `pom.xml` gets the same JaCoCo Maven run as Java. crapper does not run Gradle: Gradle's JaCoCo plugin writes XML only with `reports { xml.required = true }`, so pass `--coverage-command "./gradlew test jacocoTestReport"` with that set, or `--coverage-command "./gradlew koverXmlReport"` for Kover, or score reports already on disk. When a module holds more than one report, the newest wins. Gradle test source sets (`src/integrationTest`, `src/commonTest`, `src/testFixtures`) are skipped like `src/test`.
 
 Go follows crap4go: `if`, `for`, `range`, each `switch` and `select` clause, and `&&` / `||`. Coverage is `go test -coverprofile`.
 
@@ -77,6 +80,7 @@ By default a run deletes the previous report for each language it is about to me
 | --- | --- | --- |
 | Clojure | `clj -M:cov --lcov` (needs `deps.edn` or `bb.edn`) | `target/coverage/` |
 | Java | JaCoCo Maven plugin `0.8.12` in each module with `pom.xml` | `target/site/jacoco/jacoco.xml` |
+| Kotlin | JaCoCo Maven plugin in each module with `pom.xml`; Gradle is not run, and its reports are read, not deleted | `target/site/jacoco/jacoco.xml`, `build/reports/jacoco/test/jacocoTestReport.xml` or `build/reports/kover/report.xml` |
 | Go | `go test ./... -coverprofile=...` | `target/coverage/go/coverage.out` |
 | TypeScript | `npm run coverage`, or Vitest `--coverage`, or `npx c8 ... npm test` | `coverage/lcov.info` or `target/coverage/typescript/lcov.info` |
 | Rust | `cargo llvm-cov` or `cargo tarpaulin`, per Cargo package | `target/coverage/rust/lcov.info` |

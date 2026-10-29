@@ -440,8 +440,27 @@ def _cover_clojure(root: Path) -> None:
         _warn(f"Clojure coverage exited {code}. Clojure coverage will score 0%.")
 
 
+def _kotlin_outside_maven(root: Path, files: list[Path]) -> bool:
+    return any(
+        Path(file).suffix == ".kt" and _nearest(file, "pom.xml", root) is None
+        for file in files
+    )
+
+
 def _cover_java(root: Path, files: list[Path]) -> None:
-    modules = _modules_with(files, ".java", "pom.xml", root)
+    """JaCoCo through Maven, for Java and for Kotlin built with kotlin-maven-plugin."""
+
+    if _kotlin_outside_maven(root, files):
+        _warn(
+            "crapper does not run Gradle. Kotlin outside a pom.xml module scores the "
+            "JaCoCo or Kover XML already on disk; pass --coverage-command to refresh it."
+        )
+    modules = sorted(
+        {
+            *_modules_with(files, ".java", "pom.xml", root),
+            *_modules_with(files, ".kt", "pom.xml", root),
+        }
+    )
     if not modules:
         _warn("No pom.xml; skipping Java coverage.")
         return
@@ -583,7 +602,7 @@ def run_coverage(root: Path, files: list[Path], command: str | None) -> int:
     languages = _languages_in(files)
     if "clojure" in languages:
         _cover_clojure(root)
-    if "java" in languages:
+    if languages & {"java", "kotlin"}:
         _cover_java(root, files)
     if "go" in languages:
         _cover_go(root, files)

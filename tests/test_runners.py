@@ -547,3 +547,23 @@ def test_vitest_install_restores_manifests_when_install_changes_them(tmp_path, m
 def test_python_sources_name_a_top_level_module_without_its_suffix(tmp_path):
     module = tmp_path / "carddav.py"
     assert python_sources(tmp_path, [module, tmp_path / "test_carddav.py"]) == "carddav"
+
+
+def test_kotlin_maven_modules_get_jacoco_and_gradle_kotlin_is_reported(tmp_path, monkeypatch, capsys):
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        "crapper.runners.run_shell",
+        lambda command, cwd: calls.append((_as_text(command), cwd)) or 0,
+    )
+    _write(tmp_path, "billing/pom.xml", "<project></project>\n")
+    maven = _write(tmp_path, "billing/src/main/kotlin/Invoice.kt", "class Invoice\n")
+    run_coverage(tmp_path, [maven], None)
+    assert [(text.split()[0], cwd) for text, cwd in calls] == [("mvn", tmp_path / "billing")]
+    assert "does not run Gradle" not in capsys.readouterr().err
+
+    _write(tmp_path, "util/build.gradle.kts", "plugins { jacoco }\n")
+    gradle = _write(tmp_path, "util/src/main/kotlin/Strings.kt", "fun f() = 1\n")
+    calls.clear()
+    run_coverage(tmp_path, [gradle], None)
+    assert calls == []
+    assert "does not run Gradle" in capsys.readouterr().err

@@ -1,3 +1,5 @@
+import os
+
 from crapper.coverage import (
     CoverageBundle,
     go_percent,
@@ -158,3 +160,97 @@ def test_load_bundle_merges_each_report(tmp_path):
     assert bundle.percent_for(function(start_line=3, end_line=4)) == 50.0
     assert bundle.go_profile is not None
     assert bundle.jacoco is not None
+
+
+def test_kotlin_reads_gradle_jacoco_and_kover_reports(tmp_path):
+    gradle = tmp_path / "billing" / "build" / "reports" / "jacoco" / "test" / "jacocoTestReport.xml"
+    gradle.parent.mkdir(parents=True)
+    gradle.write_text(
+        '<report><class name="demo/billing/Invoice"><method name="pay" line="7">'
+        '<counter type="INSTRUCTION" missed="1" covered="1"/></method></class></report>',
+        encoding="utf-8",
+    )
+    kover = tmp_path / "util" / "build" / "reports" / "kover" / "report.xml"
+    kover.parent.mkdir(parents=True)
+    kover.write_text(
+        '<report><class name="demo/util/StringsKt"><method name="clamp" line="3">'
+        '<counter type="INSTRUCTION" missed="0" covered="4"/></method></class></report>',
+        encoding="utf-8",
+    )
+    bundle = load_bundle(tmp_path)
+    pay = function(
+        name="pay",
+        namespace="demo.billing.Invoice",
+        language="kotlin",
+        jacoco_class="demo.billing.Invoice",
+        start_line=6,
+        path="billing/src/main/kotlin/demo/billing/Invoice.kt",
+    )
+    clamp = function(
+        name="clamp",
+        namespace="demo.util.StringsKt",
+        language="kotlin",
+        jacoco_class="demo.util.StringsKt",
+        start_line=3,
+        path="util/src/main/kotlin/demo/util/strings.kt",
+    )
+    assert bundle.percent_for(pay) == 50.0
+    assert bundle.percent_for(clamp) == 100.0
+
+
+def _jacoco_report(path, classes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(
+        f'<class name="{name}">'
+        + "".join(
+            f'<method name="{method}" line="{line}">'
+            f'<counter type="INSTRUCTION" missed="{missed}" covered="{covered}"/></method>'
+            for method, line, missed, covered in methods
+        )
+        + "</class>"
+        for name, methods in classes.items()
+    )
+    path.write_text(f"<report>{body}</report>", encoding="utf-8")
+
+
+def kotlin(name, jacoco_class, start_line):
+    return function(
+        name=name,
+        namespace=jacoco_class.replace("$", "."),
+        language="kotlin",
+        jacoco_class=jacoco_class,
+        start_line=start_line,
+        path="src/main/kotlin/p/Svc.kt",
+    )
+
+
+def test_kotlin_matches_the_method_names_kotlinc_writes(tmp_path):
+    _jacoco_report(
+        tmp_path / "build" / "reports" / "kover" / "report.xml",
+        {
+            "p/Svc": [
+                ("hidden$billing", 4, 1, 3),
+                ("take-Bj0nuMk", 8, 0, 5),
+                ("outer", 12, 0, 2),
+                ("outer$local", 13, 2, 0),
+            ],
+            "p/Shape$DefaultImpls": [("area", 3, 1, 1)],
+        },
+    )
+    bundle = load_bundle(tmp_path)
+    assert bundle.percent_for(kotlin("hidden", "p.Svc", 4)) == 75.0
+    assert bundle.percent_for(kotlin("take", "p.Svc", 8)) == 100.0
+    assert bundle.percent_for(kotlin("outer", "p.Svc", 12)) == 100.0
+    assert bundle.percent_for(kotlin("area", "p.Shape", 3)) == 50.0
+    assert bundle.percent_for(kotlin("absent", "p.Svc", 4)) is None
+
+
+def test_the_newest_report_wins_when_a_module_has_two(tmp_path):
+    stale = tmp_path / "app" / "build" / "reports" / "jacoco" / "test" / "jacocoTestReport.xml"
+    fresh = tmp_path / "app" / "build" / "reports" / "kover" / "report.xml"
+    _jacoco_report(stale, {"p/S": [("g", 3, 10, 0)]})
+    _jacoco_report(fresh, {"p/S": [("g", 3, 0, 10)]})
+    os.utime(stale, (1_000_000, 1_000_000))
+    assert load_bundle(tmp_path).percent_for(kotlin("g", "p.S", 3)) == 100.0
+    os.utime(fresh, (1, 1))
+    assert load_bundle(tmp_path).percent_for(kotlin("g", "p.S", 3)) == 0.0

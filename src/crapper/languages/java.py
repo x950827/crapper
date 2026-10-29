@@ -15,6 +15,7 @@ from crapper.languages.treesitter import (
     end_line,
     node_text,
     parse,
+    qualify,
     start_line,
 )
 from crapper.model import Function
@@ -78,13 +79,6 @@ def _type_chain(data: bytes, node) -> list[str]:
     return names
 
 
-def _qualify(package: str | None, names: list[str], nested: str) -> str:
-    body = nested.join(names)
-    if package:
-        return f"{package}.{body}" if body else package
-    return body
-
-
 def functions_in_source(
     source: str, path: str, project_root: str | None = None
 ) -> list[Function]:
@@ -103,13 +97,13 @@ def functions_in_source(
                     found.append(
                         Function(
                             name=node_text(data, ident),
-                            namespace=_qualify(package, names, "."),
+                            namespace=qualify(package, names, "."),
                             complexity=complexity(node, _is_decision, _skip),
                             start_line=start_line(node),
                             end_line=end_line(node),
                             path=path,
                             language="java",
-                            jacoco_class=_qualify(package, names, "$"),
+                            jacoco_class=qualify(package, names, "$"),
                         )
                     )
             continue

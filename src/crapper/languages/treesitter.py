@@ -1,4 +1,4 @@
-"""Shared tree-sitter helpers for Java, Go, TypeScript, Rust, and Python."""
+"""Shared tree-sitter helpers for Java, Kotlin, Go, TypeScript, Rust, and Python."""
 
 from functools import lru_cache
 from pathlib import Path
@@ -31,6 +31,15 @@ def end_line(node) -> int:
     if col == 0:
         return max(start_line(node), row)
     return row + 1
+
+
+def qualify(package: str | None, names: list[str], nested: str) -> str:
+    """Join a package and its type names, nested types separated by `nested`."""
+
+    body = nested.join(names)
+    if package:
+        return f"{package}.{body}" if body else package
+    return body
 
 
 def child_of_type(node, *types: str):

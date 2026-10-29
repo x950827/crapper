@@ -361,11 +361,7 @@ class JacocoMethod:
         return coverage_percent(self.covered, self.missed + self.covered)
 
 
-def _jacoco_from_index(classes, class_names, method_name, line) -> float | None:
-    pool: list[JacocoMethod] = []
-    for name in class_names:
-        for method in classes.get(f"{name}#{method_name}", []):
-            pool.append(method)
+def _nearest_percent(pool: list[JacocoMethod], line: int) -> float | None:
     if not pool:
         return None
     for method in pool:
@@ -373,6 +369,34 @@ def _jacoco_from_index(classes, class_names, method_name, line) -> float | None:
             return method.percent
     nearest = min(pool, key=lambda method: abs(method.line - line))
     return nearest.percent
+
+
+def _jacoco_from_index(classes, class_names, method_name, line) -> float | None:
+    pool: list[JacocoMethod] = []
+    for name in class_names:
+        for method in classes.get(f"{name}#{method_name}", []):
+            pool.append(method)
+    return _nearest_percent(pool, line)
+
+
+def _jacoco_classes(function: Function) -> list[str]:
+    names = []
+    if function.jacoco_class:
+        names.append(function.jacoco_class)
+        if function.language == "kotlin":
+            # Before Kotlin 2.2, a method body in an interface is compiled
+            # into the static `Iface$DefaultImpls.method`.
+            names.append(f"{function.jacoco_class}$DefaultImpls")
+    if function.namespace not in names:
+        names.append(function.namespace)
+    return names
+
+
+def _is_mangled(method_name: str, name: str) -> bool:
+    """kotlinc renames `internal` members to `name$module` and functions
+    taking inline value classes to `name-hash`."""
+
+    return method_name.startswith((f"{name}$", f"{name}-"))
 
 
 def _instruction_counter(method):
@@ -425,6 +449,9 @@ class CoverageBundle:
     jacoco: dict[str, list[JacocoMethod]] | None = None
     form_html: dict[str, dict[int, tuple[int, int]]] = field(default_factory=dict)
     source_parts: list[tuple[str, ...]] = field(default_factory=list)
+    _by_class: dict[str, list[tuple[str, JacocoMethod]]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def bind_sources(self, paths: list[str]) -> None:
         """Remember project files so a short path cannot take a longer file's report."""
@@ -440,15 +467,8 @@ class CoverageBundle:
         self.source_parts = found
 
     def percent_for(self, function: Function) -> float | None:
-        if function.language == "java":
-            names = []
-            if function.jacoco_class:
-                names.append(function.jacoco_class)
-            if function.namespace not in names:
-                names.append(function.namespace)
-            return _jacoco_from_index(
-                self.jacoco or {}, names, function.name, function.start_line
-            )
+        if function.language in ("java", "kotlin"):
+            return self._jacoco_percent(function)
         if function.language == "go":
             return go_percent(
                 self.go_profile,
@@ -467,6 +487,33 @@ class CoverageBundle:
         if branched is not None:
             return branched
         return percent_for_range(record, function.start_line, function.end_line)
+
+    def _jacoco_percent(self, function: Function) -> float | None:
+        names = _jacoco_classes(function)
+        found = _jacoco_from_index(
+            self.jacoco or {}, names, function.name, function.start_line
+        )
+        if found is not None or function.language != "kotlin":
+            return found
+        methods = self._methods_by_class()
+        pool = [
+            method
+            for name in names
+            for method_name, method in methods.get(name, [])
+            if _is_mangled(method_name, function.name)
+        ]
+        return _nearest_percent(pool, function.start_line)
+
+    def _methods_by_class(self) -> dict[str, list[tuple[str, JacocoMethod]]]:
+        if self._by_class is None:
+            index: dict[str, list[tuple[str, JacocoMethod]]] = {}
+            for key, methods in (self.jacoco or {}).items():
+                class_name, _, method_name = key.partition("#")
+                index.setdefault(class_name, []).extend(
+                    (method_name, method) for method in methods
+                )
+            self._by_class = index
+        return self._by_class
 
     def _html_lines(self, path: str) -> dict[int, tuple[int, int]] | None:
         return _lookup(self.form_html, path, self.source_parts)
@@ -533,11 +580,27 @@ def _merge_go(root: Path) -> dict[str, list[tuple[int, int, int, int]]]:
 
 
 def _merge_jacoco(root: Path) -> dict[str, list[JacocoMethod]]:
-    paths = [root / "target" / "site" / "jacoco" / "jacoco.xml"]
-    paths.extend(root.glob("*/target/site/jacoco/jacoco.xml"))
-    paths.extend(root.glob("*/*/target/site/jacoco/jacoco.xml"))
+    # Maven's JaCoCo plugin, Gradle's `jacocoTestReport` and Kover all write
+    # JaCoCo XML; Kotlin uses the latter two.
+    reports = (
+        "target/site/jacoco/jacoco.xml",
+        "build/reports/jacoco/test/jacocoTestReport.xml",
+        "build/reports/kover/report.xml",
+    )
+    paths: list[Path] = []
+    for report in reports:
+        paths.append(root / report)
+        paths.extend(root.glob(f"*/{report}"))
+        paths.extend(root.glob(f"*/*/{report}"))
+    # A module can hold reports from both tools, or a stale one from an old
+    # build; the newest report comes first and wins a tie.
+    existing = sorted(
+        (path for path in paths if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     merged: dict[str, list[JacocoMethod]] = {}
-    for text in _merge_texts(paths):
+    for text in _merge_texts(existing):
         for key, methods in parse_jacoco_index(text).items():
             merged.setdefault(key, []).extend(methods)
     return merged

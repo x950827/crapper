@@ -351,3 +351,19 @@ def test_rust_relative_path_and_a_trait_method(tmp_path):
     path = tmp_path / "src" / "lib.rs"
     functions = rust_functions(source, str(path), str(tmp_path))
     assert [(fn.namespace, fn.name) for fn in functions] == [("demo", "draw")]
+
+
+def test_gradle_test_source_sets_are_tests(tmp_path):
+    kept = []
+    for relative in ("src/main/kotlin/p/App.kt", "src/main/kotlin/p/abTest/Split.kt"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fun f() = 1\n", encoding="utf-8")
+        kept.append(path.resolve())
+    for source_set in ("commonTest", "jvmTest", "androidUnitTest", "integrationTest", "testFixtures"):
+        path = tmp_path / "src" / source_set / "kotlin" / "p" / "ATest.kt"
+        path.parent.mkdir(parents=True)
+        path.write_text("fun f() = 1\n", encoding="utf-8")
+        assert is_test_file(path) is True
+    assert iter_source_files([tmp_path]) == sorted(kept, key=lambda path: path.as_posix())
+    assert iter_source_files([tmp_path / "src"]) == sorted(kept, key=lambda path: path.as_posix())
